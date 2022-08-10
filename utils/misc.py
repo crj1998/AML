@@ -6,6 +6,14 @@ import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 
+
+def unwrap_model(model):
+    if hasattr(model, "model"):
+        return model.model
+    else:
+        return model
+
+
 def setup_seed(seed=0):
     random.seed(seed)
     np.random.seed(seed)

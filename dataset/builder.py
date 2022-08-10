@@ -49,6 +49,7 @@ from dataset.randaug import RandAugment
 
 def build(name, data_path, batch_size, num_workers, split_valid=0):
     name = name.lower()
+    assert name in ["cifar10", "cifar100"], f"Unknown dataset {name}."
     if name == "cifar10":
 
         # transform = [
@@ -65,27 +66,30 @@ def build(name, data_path, batch_size, num_workers, split_valid=0):
         #     ])
         # ]
         transform = T.Compose([
+            # T.RandAugment(),
+            # T.AutoAugment(T.AutoAugmentPolicy("cifar10")),
             T.RandomCrop(32, padding=4, padding_mode="reflect"),
             T.RandomHorizontalFlip(),
             T.ToTensor(),
         ])
         train_set = CIFAR10(root=data_path, train=True, download=False, transform=transform)
-        valid_set = CIFAR10(root=data_path, train=False, download=False, transform=T.ToTensor())
+        valid_set = CIFAR10(root=data_path, train=True, download=False, transform=transform)
         test_set  = CIFAR10(root=data_path, train=False, download=False, transform=T.ToTensor())
 
-        # targets = np.array(train_set.targets)
-        # flag = np.zeros(targets.shape[0], dtype=bool)
-        # flag[targets.argsort().reshape(10, -1)[:, -split_valid:].reshape(-1)] = True
-        # train_set.data, train_set.targets = train_set.data[~flag], targets[~flag]
+        if split_valid > 0:
+            targets = np.array(train_set.targets)
+            flag = np.zeros(targets.shape[0], dtype=bool)
+            flag[targets.argsort().reshape(10, -1)[:, -split_valid:].reshape(-1)] = True
+            train_set.data, train_set.targets = train_set.data[~flag], targets[~flag]
 
-        # targets = np.array(valid_set.targets)
-        # flag = np.zeros(targets.shape[0], dtype=bool)
-        # flag[targets.argsort().reshape(10, -1)[:, -split_valid:].reshape(-1)] = True
-        # valid_set.data, valid_set.targets = valid_set.data[flag], targets[flag]
+            # targets = np.array(valid_set.targets)
+            # flag = np.zeros(targets.shape[0], dtype=bool)
+            # flag[targets.argsort().reshape(10, -1)[:, -split_valid:].reshape(-1)] = True
+            valid_set.data, valid_set.targets = valid_set.data[flag], targets[flag]
         
         train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=False)
-        valid_loader = DataLoader(valid_set, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-        test_loader  = DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+        valid_loader = DataLoader(valid_set, batch_size=batch_size, shuffle=False, num_workers=2)
+        test_loader  = DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=2)
     
     return train_loader, valid_loader, test_loader
 

@@ -36,6 +36,9 @@ class AccuracyMetric:
     def update(self, preds, targets):
         self.Preds.append(preds)
         self.Targets.append(targets)
+
+    def numpy(self):
+        return np.hstack(self.Preds), np.hstack(self.Targets)
     
     def item(self):
         return self.accuracy()

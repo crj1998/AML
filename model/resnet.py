@@ -33,7 +33,7 @@ class BasicBlock(nn.Module):
                 ("bn", nn.BatchNorm2d(self.expansion*out_channels))
             ]))
         else:
-            self.shortcut = nn.Sequential()
+            self.shortcut = nn.Identity()
 
     def forward(self, x):
         identity = self.shortcut(x)
@@ -64,7 +64,7 @@ class Bottleneck(nn.Module):
                 ("bn", nn.BatchNorm2d(self.expansion*out_channels))
             ]))
         else:
-            self.shortcut = nn.Sequential()
+            self.shortcut = nn.Identity()
 
     def forward(self, x):
         identity = self.shortcut(x)
@@ -82,8 +82,6 @@ class ResNet(nn.Module):
     _C = [3, 64, 128, 256, 512]
     def __init__(self, block, num_blocks, num_classes):
         super(ResNet, self).__init__()
-        self.hooks = {}
-        self.handles = {}
         self.channels = self._C[1]
         self.layer0 = nn.Sequential(OrderedDict([
             ("conv", nn.Conv2d(in_channels=self._C[0], out_channels=self._C[1], kernel_size=3, stride=1, padding=1, bias=False)),

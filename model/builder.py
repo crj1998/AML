@@ -1,10 +1,13 @@
-from model import resnet, wideresnet
+from model import resnet, preactresnet, wideresnet, convformer
 
 models = {
-    "resnet18": resnet.resnet18,
-    "resnet50": resnet.resnet50,
+    "resnet-18": resnet.resnet18,
+    "resnet-50": resnet.resnet50,
+    "preactresnet-18": preactresnet.preactresnet18,
+    "preactresnet-50": preactresnet.preactresnet50,
     "wideresnet-28-10": wideresnet.wideresnet_28_10,
-    "wideresnet-34-16": wideresnet.wideresnet_34_16
+    "wideresnet-34-16": wideresnet.wideresnet_34_16,
+    "convformer-tiny": convformer.convformerTiny
 }
 
 def build(arch, num_classes):

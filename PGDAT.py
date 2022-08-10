@@ -41,12 +41,12 @@ def train(epoch, model, dataloader, criterion, optimizer, **kwargs):
             loss.backward()
             optimizer.step()
             
-            Loss.update(loss.item(), labels.size(0))
+            Loss.update(loss.item(), batch_size)
             Acc.update(logits.detach().argmax(dim=-1).cpu().numpy(), labels.cpu().numpy())
             
             t.set_postfix({"Loss": f"{str(Loss)}", "Acc": f"{str(Acc)}"})
 
-            acc = (logits.detach().argmax(dim=-1)==labels).sum().item()/labels.size(0)
+            acc = (logits.detach().argmax(dim=-1)==labels).sum().item()/batch_size
 
             iters = len(dataloader)*(epoch-1) + i
             writer.add_scalar("Train/Loss", loss.item(), iters)
@@ -72,17 +72,19 @@ def test(model, dataloader, attack=None):
 
 def main(args):
     setup_seed(42)
-    net = model_builder.build("resnet18", args.num_classes)
+    # resnet18
+    net = model_builder.build("convformer-tiny", args.num_classes)
     net = net.to(device)
 
     train_loader, valid_loader, test_loader = dataset_builder.build("cifar10", args.data_path, args.batch_size, num_workers=2)
 
     criterion = nn.CrossEntropyLoss(reduction="none")
 
-    optimizer = optim_builder.build("SGD", net, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
-    scheduler = scheduler_builder.build("stepwise", optimizer, milestones=args.milestones, gamma=0.1, last_epoch=-1)
+    # optimizer = optim_builder.build("SGD", net, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    # scheduler = scheduler_builder.build("stepwise", optimizer, milestones=args.milestones, gamma=0.1, last_epoch=-1)
+    optimizer = optim_builder.build("AdamW", net, lr=args.lr, weight_decay=args.weight_decay)
+    scheduler = scheduler_builder.build("cosine", optimizer, warmup=20, total=args.epochs, lr_min=0.01, last_epoch=-1)
 
-    
     Train, Clean, Pgd10 = [], [], []
     best_pgd10 = 0
 
@@ -118,8 +120,10 @@ def main(args):
 
 if __name__ == "__main__":
     """
-    $ CUDA_VISIBLE_DEVICES=0 python AML/PGDAT.py --epochs 150 --milestones 50 100 --suffix rn18/PGDATpathaug
+    $ CUDA_VISIBLE_DEVICES=0 python AML/PGDAT.py --epochs 150 --milestones 50 100 --suffix wideresnet-28-10/PGDAT
     $ CUDA_VISIBLE_DEVICES=0 python AML/PGDAT.py --epochs 150 --milestones 50 100 --suffix wideresnet-34-16/PGDAT
+    CUDA_VISIBLE_DEVICES=0 python AML/PGDAT.py --epochs 200 --milestones 150 --suffix resnet-18/PGDAT001 --lr 0.001
+    python AML/PGDAT.py --epochs 200 --lr 0.001 --weight_decay 0.1
     """
     import argparse
     parser = argparse.ArgumentParser(description="PyTorch ImageNet Training")

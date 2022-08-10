@@ -1,5 +1,4 @@
 import os
-from soupsieve import closest
 
 from tqdm import tqdm
 from datetime import datetime
@@ -10,100 +9,46 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
 from model import builder as model_builder
+
 from dataset import builder as dataset_builder
 from optimizer import builder as optim_builder
+from optimizer import AWP
 from scheduler import builder as scheduler_builder
 from attacker import builder as atk_builder
 
-from utils.misc import setup_seed, CSVwriter
+from utils.misc import setup_seed, CSVwriter, unwrap_model
 from utils.metric import LossMetric, AccuracyMetric
 from utils.plot import plot_learning_curve
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def aggregate_mean(x, y):
-    N = x.shape[0]
-    C = y.max() + 1
-    weight = torch.zeros(C, N).to(x.device)
-    weight[y, torch.arange(N)] = 1
-    label_count = weight.sum(dim=1)
-    weight = F.normalize(weight, p=1, dim=1) # l1 normalization
-    mean = torch.mm(weight, x)
-    index = torch.arange(mean.shape[0])[label_count > 0]
-    return index, mean[index]
-
-# @torch.no_grad()
-# def unseen_dist(model, dataloader):
-#     model.eval()
-#     cls_probs = torch.zeros((10, 10), device=device)
-#     probs = []
-#     labels = []
-#     for _, (images, targets) in enumerate(dataloader):
-#         images, targets = images.to(device), targets.to(device)
-#         probs.append(F.softmax(model(images), dim=-1))
-#         labels.append(targets)
-#     probs = torch.cat(probs, dim=0)
-#     labels = torch.cat(labels, dim=0)
-#     idx, mean = aggregate_mean(probs, labels)
-#     cls_probs[idx] = mean
-#     return cls_probs
-
-@torch.no_grad()
-def unseendata(model, dataloader):
-    model.eval()
-    logits = []
-    labels = []
-    for _, (images, targets) in enumerate(dataloader):
-        images, targets = images.to(device), targets.to(device)
-        logits.append(model(images).detach())
-        labels.append(targets)
-    logits = torch.cat(logits, dim=0)
-    labels = torch.cat(labels, dim=0)
-    return logits, labels
-
 @torch.enable_grad()
-def train(epoch, model, dataloader, valid_loader, criterion, optimizer, **kwargs):
+def train(epoch, model, dataloader, criterion, optimizer, **kwargs):
     global writer
-    CE = LossMetric()
-    KL = LossMetric()
+
     Loss = LossMetric()
     Acc = AccuracyMetric(10)
-    # PGD10 = atk_builder.build("PGD", steps=10, step_size=2/255, epsilon=8/255)
-    TRADES10 = atk_builder.build("TRADES", steps=10, step_size=2/255, epsilon=8/255)
-    beta = 6.0
+    PGD10 = atk_builder.build("PGD", steps=10, step_size=2/255, epsilon=8/255)
     with tqdm(enumerate(dataloader), total=len(dataloader), desc=f"Train ({epoch:2d})", ncols=120) as t:
         for i, (images, labels) in t:
-            if i%10 == 0:
-                valid_logits, valid_labels = unseendata(model, valid_loader)
-                valid_logits_norm = F.normalize(valid_logits, p=2, dim=-1)
             images, labels = images.to(device), labels.to(device)
             batch_size = labels.size(0)
-            delta = TRADES10(model, images)
-            # delta = PGD10(model, images, labels)
+            delta = PGD10(model, images, labels)
+            with torch.no_grad():
+                probs = F.softmax(model(images+delta), dim=-1)
+                weight = torch.gather(probs, dim=-1, index=labels.reshape(batch_size, 1)).reshape(batch_size)
+            model.perturb(images + delta, labels, weight)
 
             model.train()
-            logits_all = model(torch.cat([images + delta, images], dim=0))
-            logits, logits_ori = logits_all[:batch_size], logits_all[batch_size:]
-            
-            sim = torch.mm(F.normalize(logits_ori.detach(), p=2, dim=-1), valid_logits_norm.T)
-            closest = sim.argmax(dim=-1)
-            pseudo = F.softmax(valid_logits, dim=-1)[closest]
-            # correct = (logits_ori.detach().argmax(dim=-1)==labels) & (valid_labels[closest] == labels)
-            targets = F.one_hot(labels, num_classes=10).float()
-            # targets[correct] = 0.5 * targets[correct] + 0.5 * pseudo[correct]
-            targets = 0.5 * targets + 0.5*pseudo
-            # torch.where(logits_ori.detach().argmax(dim=-1)==labels, pseudo, F.one_hot(labels, num_classes=10).float())
-            kl = F.kl_div(F.log_softmax(logits, dim=-1), F.softmax(logits_ori, dim=-1), reduction="batchmean")
-            ce = ( - F.log_softmax(logits_ori, dim=-1) * targets).sum(dim=-1).mean()
-            loss = ce + beta * kl
+            logits = model(images + delta)
+            loss = criterion(logits, labels).mean()
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             
+            model.restore()
             Loss.update(loss.item(), batch_size)
-            CE.update(ce.item(), batch_size)
-            KL.update(kl.item(), batch_size)
             Acc.update(logits.detach().argmax(dim=-1).cpu().numpy(), labels.cpu().numpy())
             
             t.set_postfix({"Loss": f"{str(Loss)}", "Acc": f"{str(Acc)}"})
@@ -114,7 +59,7 @@ def train(epoch, model, dataloader, valid_loader, criterion, optimizer, **kwargs
             writer.add_scalar("Train/Loss", loss.item(), iters)
             writer.add_scalar("Train/Acc", acc, iters)
 
-    return Loss.item(), Acc.item(), CE.item(), KL.item()
+    return Loss.item(), Acc.item()
 
 @torch.no_grad()
 def test(model, dataloader, attack=None):
@@ -134,10 +79,12 @@ def test(model, dataloader, attack=None):
 
 def main(args):
     setup_seed(42)
-    net = model_builder.build("resnet18", args.num_classes)
+    # resnet18, wideresnet-28-10
+    net = model_builder.build("wideresnet-28-10", args.num_classes)
+    net = AWP(net, gamma=0.005)
     net = net.to(device)
 
-    train_loader, valid_loader, test_loader = dataset_builder.build("cifar10", args.data_path, args.batch_size, num_workers=2, split_valid=50)
+    train_loader, valid_loader, test_loader = dataset_builder.build("cifar10", args.data_path, args.batch_size, num_workers=2)
 
     criterion = nn.CrossEntropyLoss(reduction="none")
 
@@ -151,11 +98,11 @@ def main(args):
     global writer
     writer = SummaryWriter(args.out)
     recorder = CSVwriter(f"{args.out}/record.csv")
-    recorder.register(["Epoch", "LR", "Loss", "CE", "KL", "Acc", "Clean", "PGD10"])
+    recorder.register(["Epoch", "LR", "Loss", "Acc", "Clean", "PGD10"])
     
     PGD10 = atk_builder.build("PGD", steps=10, step_size=2/255, epsilon=8/255)
     for epoch in range(1, args.epochs+1):
-        loss, acc, ce, kl = train(epoch, net, train_loader, valid_loader, criterion, optimizer)
+        loss, acc = train(epoch, net, train_loader, criterion, optimizer)
         clean = test(net, test_loader, None)
         pgd10 = test(net, test_loader, PGD10)
 
@@ -169,18 +116,19 @@ def main(args):
         writer.add_scalar("Test/clean", clean, epoch)
         writer.add_scalar("Test/pgd10", pgd10, epoch)
         writer.add_scalar("LR", lr, epoch)
-        recorder.update([epoch, lr, loss, ce, kl, acc, clean, pgd10])
+        recorder.update([epoch, lr, round(loss, 4), round(acc, 4), round(clean, 4), round(pgd10, 4)])
         plot_learning_curve(args.out, args.epochs, TRAIN=Train, CLEAN=Clean, PGD10=Pgd10)
-        torch.save(net.state_dict(), f"{args.out}/last.pth")
+        torch.save(unwrap_model(net).state_dict(), f"{args.out}/last.pth")
         if pgd10 > best_pgd10:
             best_pgd10 = pgd10
-            torch.save(net.state_dict(), f"{args.out}/best.pth")
+            torch.save(unwrap_model(net).state_dict(), f"{args.out}/best.pth")
 
     writer.close()
 
 if __name__ == "__main__":
     """
-    $ CUDA_VISIBLE_DEVICES=0 python AML/unseen.py --epochs 150 --milestones 50 100 --suffix resnet-18/unseen --debug
+    $ CUDA_VISIBLE_DEVICES=0 python AML/AWP.py --epochs 150 --milestones 50 100 --suffix resnet-18/PGDAT-AWP+ --debug
+    $ CUDA_VISIBLE_DEVICES=0 python AML/AWP.py --epochs 150 --milestones 50 100 --suffix wideresnet-28-10/PGDAT-AWP+ --debug
     """
     import argparse
     parser = argparse.ArgumentParser(description="PyTorch ImageNet Training")
