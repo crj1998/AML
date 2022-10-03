@@ -40,7 +40,7 @@ def train(epoch, model, dataloader, criterion, optimizer, **kwargs):
             grads = torch.autograd.grad(loss, [p for n, p in model.named_parameters() if ("weight" in n) and ("bn" not in n)], create_graph=True, retain_graph=True, only_inputs=True)
             for grad in grads:
                 grad_norm += grad.square().sum()
-            loss += 0.1*grad_norm/len(grads)
+            loss += 0.2*grad_norm/len(grads)
 
             optimizer.zero_grad()
             loss.backward()
