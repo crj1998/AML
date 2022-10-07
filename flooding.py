@@ -25,7 +25,7 @@ def train(epoch, model, dataloader, criterion, optimizer, **kwargs):
 
     Loss = LossMetric()
     Acc = AccuracyMetric(10)
-    b = 1.2
+    b = kwargs.get("b", 0.0)
     PGD10 = atk_builder.build("PGD", steps=10, step_size=2/255, epsilon=8/255)
     with tqdm(enumerate(dataloader), total=len(dataloader), desc=f"Train ({epoch:2d})", ncols=120) as t:
         for i, (images, labels) in t:
@@ -74,7 +74,7 @@ def test(model, dataloader, attack=None):
 
 def main(args):
     setup_seed(42)
-    net = model_builder.build("wideresnet-28-10", args.num_classes)
+    net = model_builder.build("resnet-18", args.num_classes)
     net = net.to(device)
 
     train_loader, valid_loader, test_loader = dataset_builder.build("cifar10", args.data_path, args.batch_size, num_workers=2)
@@ -94,7 +94,7 @@ def main(args):
     
     PGD10 = atk_builder.build("PGD", steps=10, step_size=2/255, epsilon=8/255)
     for epoch in range(1, args.epochs+1):
-        loss, acc = train(epoch, net, train_loader, criterion, optimizer)
+        loss, acc = train(epoch, net, train_loader, criterion, optimizer, b=args.b)
         clean = test(net, test_loader, None)
         pgd10 = test(net, test_loader, PGD10)
 
@@ -132,7 +132,8 @@ if __name__ == "__main__":
     parser.add_argument("--milestones", default=[50, 75], type=int, nargs='+', metavar='LIST')
     parser.add_argument("--num_per_class", default=5000, type=int, metavar='INT')
     parser.add_argument("--debug", action="store_true")
-        
+    
+    parser.add_argument('--b', default=0.0, type=float, metavar='FLOAT', help='flooding bias')
     args = parser.parse_args()
     
     args.out = os.path.join("results", args.suffix if args.debug else f"{args.suffix}@{datetime.today().strftime('%m-%d %H:%M')}")
@@ -141,5 +142,5 @@ if __name__ == "__main__":
 
 """
 CUDA_VISIBLE_DEVICES=0 
-python AML/flooding.py --epochs 200 --milestones 100 150 --suffix wideresnet-28-10/Flooding_12 --lr 0.1
+python AML/flooding.py --epochs 200 --milestones 100 150 --suffix resnet-18/Flooding_08 --lr 0.1 --b 0.8
 """
